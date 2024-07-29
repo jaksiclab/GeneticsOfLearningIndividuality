@@ -1,0 +1,13 @@
+Type III Analysis of Variance Table with Satterthwaite's method
+                              Sum Sq  Mean Sq NumDF  DenDF F value   Pr(>F)   
+genotype                    0.292205 0.026564    11 607.44  2.7383 0.001821 **
+treatment                   0.055820 0.055820     1  64.95  5.7542 0.019330 * 
+shock_sensitivity           0.058652 0.058652     1 633.70  6.0461 0.014203 * 
+sex                         0.002280 0.002280     1 112.12  0.2350 0.628785   
+developmental_noise         0.001155 0.001155     1 641.96  0.1191 0.730175   
+starting_arm_code           0.050904 0.016968     3 652.13  1.7491 0.155681   
+genotype:treatment          0.179041 0.016276    11 607.06  1.6778 0.074544 . 
+shock_sensitivity:sex       0.055940 0.055940     1 644.13  5.7665 0.016617 * 
+treatment:starting_arm_code 0.044914 0.014971     3 652.01  1.5433 0.202081   
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1

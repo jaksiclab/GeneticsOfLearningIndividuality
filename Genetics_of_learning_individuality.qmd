@@ -1,0 +1,2635 @@
+---
+title: "Genetics_of_learning_individuality"
+author: "RIDDHA MANNA"
+format: html
+editor: visual
+---
+
+## ABSTRACT
+
+Here we try to form a logical structure to disentangle different dimensions of learning showed by \~5000 flies tested in a parallelised operant conditioning assay.
+
+## Setting up the environment
+
+Loading required libraries, setting working directory, and writing basic functions:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(readr)
+library(writexl)
+library(ggplot2)
+library(ggsignif)
+library(tidyverse)
+library(hrbrthemes)
+library(viridis)
+library(plotly)
+library(htmlwidgets)
+library(gtools)
+library(abind)
+library(fractaldim)
+library(ie2misc)
+library(multimode)
+library(car)
+library(emmeans)
+library(lmerTest)
+library(ggpmisc)
+library(DescTools)
+library(entropy)
+library(readxl)
+library(ggridges)
+library(ggpubr)
+library(philentropy)
+library(ohenery)
+library(Rfast)
+library(umap)
+library(coin)
+library(permuco)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(ForeCA)
+# path = "/Users/manna/Documents/git/Genetics_of_learning_individuality/"
+path = "/Users/riddha/git/Genetics_of_learning_individuality/"
+setwd(path)
+print("done")
+```
+
+## Filtering
+
+For each experiment and treatment we filter out the inactive flies by measuring activity in terms of average velocity (mm/s) throughout the experiment and discarding the bottom 5 %ile.
+
+Flies spending more than 75% of the total time in the shocked arm are also discarded.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+activity_filter <- function(exp,cutoff){
+  return(quantile(df$activity[df$group==exp],cutoff,na.rm = TRUE))
+}
+
+# df = readRDS("/Users/manna/Documents/git/Genetics_of_learning_individuality/pL_green/summary_lc_pL_green_90genotypes.rds")
+
+df = readRDS("/Users/riddha/git/Genetics_of_learning_individuality/pL_green/summary_lc_with_learningscore_pL_green_90genotypes.rds")
+LSM_frac <- read_csv("~/git/Genetics_of_learning_individuality/pL_green/full_model_pair_compare_sd_90.csv")
+LSM_frac_with_Control <- read_csv("~/git/Genetics_of_learning_individuality/pL_green/full_model_pair_compare_sd_with_Control.csv")
+LSM_frac_with_Control_blue <- read_csv("~/git/Genetics_of_learning_individuality/pL_blue/full_model_blue_pair_compare_sd_with_Control.csv")
+policy_change <- read_csv("/Users/riddha/git/Genetics_of_learning_individuality/policy_change.csv")
+new_learningscore <- read_csv("~/git/Genetics_of_learning_individuality/new_learningscore.csv")
+
+policy_change$treatment = 'noShock'
+policy_change$treatment[policy_change$shocked] = 'shock'
+
+df$policy_change = NA
+
+for(i in 1:length(policy_change$trackid)){
+  genotype=policy_change$genotype[i]
+  id=policy_change$trackid[i]
+  treatment=policy_change$treatment[i]
+  df$policy_change[df$genotype==genotype & df$id==id & df$treatment==treatment] = policy_change$learningscore[i]
+}
+
+#<delete>/
+new_learningscore$treatment = 'noShock'
+new_learningscore$treatment[new_learningscore$shocked] = 'shock'
+
+df$ls = NA
+
+for(i in 1:length(new_learningscore$trackid)){
+  genotype=new_learningscore$genotype[i]
+  id=new_learningscore$trackid[i]
+  treatment=new_learningscore$treatment[i]
+  df$ls[df$genotype==genotype & df$id==id & df$treatment==treatment] = new_learningscore$new_learningscore[i]
+}
+#/<delete>
+
+
+
+# activity and Fs filter
+for(i in 1:length(df$id)){
+  activity_cutoff_low = activity_filter(df$group[i],0.05)
+  activity_cutoff_high = activity_filter(df$group[i],1)
+  activity = df$activity[i]
+  frac_time_on_shocked = df$frac_time_on_shocked[i]
+  id = as.integer(df$id[i])
+  if(is.na(activity) || is.na(frac_time_on_shocked) || activity<activity_cutoff_low || activity>activity_cutoff_high || frac_time_on_shocked<=0.0 || frac_time_on_shocked>0.75)# || id>32)
+  {
+    df$frac_time_on_shocked[i] = NA
+  }
+  
+}
+df = df[!is.na(df$id),]
+
+# manually changing relicates for exceptional experiments
+df$replicates[(df$genotype == 'dgrp105' | df$genotype == 'dgrp208') & df$replicates == 2] = 1
+df$replicates[(df$genotype == 'dgrp105' | df$genotype == 'dgrp208') & df$replicates == 3] = 2
+df$replicates[df$replicates==3 & ((df$id>=35 & df$id<=37) | (df$id>=43 & df$id<=45) | (df$id>=51 & df$id<=53) | (df$id>=59 & df$id<=61))] = 1
+df$replicates[df$replicates==3 & ((df$id>=38 & df$id<=40) | (df$id>=46 & df$id<=48) | (df$id>=54 & df$id<=56) | (df$id>=62 & df$id<=64))] = 2
+
+
+df = df[!is.na(df$frac_time_on_shocked),]
+
+ds = df[df$treatment=="shock",]
+dnS = df[df$treatment=="noShock",]
+
+print(paste("Total",length(df$id),"flies pass the filtering criteria"))
+print(paste("Out of",length(ds$id),"Conditioned flies,",length(ds$id[ds$replicates==1]),"are from replicate 1"))
+print(paste("Out of",length(dnS$id),"Control flies,",length(dnS$id[dnS$replicates==1]),"are from replicate 1"))
+
+```
+
+## Linear model
+
+Performance in the conditioning assay is measured as the fraction of the total time of the assay a fly spends on the shocked arm. This is expected to be 0.33 for a fly with no prior color-bias randomly exploring the Y-maze. For a fly that learns to avoid the arm associated with the shock, this will be lower.
+
+Assuming a linear effect of genotype, sex, shock sensitivity, developmental noise, and the starting position of the fly on the Y-maze relative to shocked arm, we fit a linear mixed effect model to the task performance.
+
+Developmental noise is estimated as the absolute locomotor handedness measured during three minutes prior to the start of the assay.
+
+Shock sensitivity is estimated as the difference in activity/velocity between the first quarter of the assay and three minutes prior the start of the assay.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+options(width = 500)
+
+d = df
+
+#setting activities in later halves
+d$activity_shock_color_24[is.na(d$activity_shock_color_24)]=d$activity_shock_color_14[is.na(d$activity_shock_color_24)]
+
+d$activity_shock_color_34[is.na(d$activity_shock_color_34)]=d$activity_shock_color_24[is.na(d$activity_shock_color_34)]
+
+d$activity_shock_color_44[is.na(d$activity_shock_color_44)]=d$activity_shock_color_34[is.na(d$activity_shock_color_44)]
+
+d$activity_noShock_color_24[is.na(d$activity_noShock_color_24)]=d$activity_noShock_color_14[is.na(d$activity_noShock_color_24)]
+
+d$activity_noShock_color_34[is.na(d$activity_noShock_color_34)]=d$activity_noShock_color_24[is.na(d$activity_noShock_color_34)]
+
+d$activity_noShock_color_44[is.na(d$activity_noShock_color_44)]=d$activity_noShock_color_34[is.na(d$activity_noShock_color_44)]
+
+get_start<-function(arms){
+  shock_arm = arms[1]
+  starting_arm = arms[2]
+  if(shock_arm == 'L'){
+    if(starting_arm == 'L') return('S')
+    if(starting_arm == 'M') return('NL')
+    if(starting_arm == 'R') return('NR')
+    if(starting_arm == 'X') return('NX')
+  }
+  if(shock_arm == 'M'){
+    if(starting_arm == 'M') return('S')
+    if(starting_arm == 'R') return('NL')
+    if(starting_arm == 'L') return('NR')
+    if(starting_arm == 'X') return('NX')
+  }
+  if(shock_arm == 'R'){
+    if(starting_arm == 'R') return('S')
+    if(starting_arm == 'L') return('NL')
+    if(starting_arm == 'M') return('NR')
+    if(starting_arm == 'X') return('NX')
+  }
+}
+starting_arm_code = c()
+for(i in 1:length(d$id)){
+  starting_arm_code = c(starting_arm_code,get_start(c(d$shock_arm[i],d$starting_arm[i])))
+}
+d$starting_arm_code = starting_arm_code
+d = d[d$frac_time_on_shocked>0,]
+d = d[d$activity_shock_color>0,]
+d = d[d$activity_noShock_color>0,]
+d$treatment = as.factor(d$treatment)
+d$correct_choices=as.numeric(d$correct_choices)
+d$incorrect_choices=as.numeric(d$incorrect_choices)
+d$total_choices=as.numeric(d$total_choices)
+d$gen_reps = as.factor(paste0(d$genotype,"_",d$replicates))
+d$replicates = as.factor(d$replicates)
+d$id=as.numeric(d$id)
+d$temp = ((d$id-1)%%8)*2/8
+d$id = as.factor(d$id)
+d$sex = as.factor(d$sex)
+d$shock_arm = as.factor(d$shock_arm)
+d$starting_arm = as.factor(d$starting_arm)
+d$starting_arm_code = as.factor(d$starting_arm_code)
+d$developmental_noise= abs(d$bias_left_handedness)
+d$shock_sensitivity = abs(d$activity_14 - d$bias_activity)
+d$pCorrect = d$correct_choices/d$total_choices
+d$pinCorrect = d$incorrect_choices/d$total_choices
+d$score = (d$correct_choices - d$incorrect_choices)/d$total_choices
+d$rel_activity = d$activity_shock_color - d$activity_noShock_color
+d$handedness = abs(d$left_handedness)
+d$activity_change = d$activity_44 - d$activity_14
+d$handedness_change = abs(d$left_handedness_44) - abs(d$left_handedness_14)
+d$rel_activity_change = (d$activity_shock_color_44 - d$activity_noShock_color_44) - (d$activity_shock_color_14 - d$activity_noShock_color_14)
+d$pCorrect_change = d$correct_choices_44/d$total_choices_44 - d$correct_choices_14/d$total_choices_14
+d$frac_change = d$frac_44 - d$frac_14
+d$color = 'darkgray'
+d$color[d$treatment=='shock'] = 'gold'
+d = d[!is.na(d$id),]
+
+d_stupid = d[!str_detect(d$genotype,"dgrp"),]
+d = d[str_detect(d$genotype,"dgrp"),]
+ds = d[d$treatment=="shock",]
+dnS = d[d$treatment=="noShock",]
+
+p=ggplot(d,aes(x = treatment, y = shock_sensitivity))+
+  ylab(expression(bold('Shock response')))+
+  geom_jitter(colour=d$color,width=0.35,alpha=0.3,shape=19)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold',
+              textsize = 8
+  )
+png('generated_plots/Shock_sensitivity.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p=ggplot()+
+  xlab("Shock response")+
+  ylab("Density")+
+  geom_density(data=dnS,aes(x = shock_sensitivity),colour='darkgray',lwd=2)+
+  geom_density(data=ds,aes(x=shock_sensitivity),colour='gold',lwd=2)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))
+
+png('generated_plots/dist_Shock_sensitivity.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+
+p=ggplot(d,aes(x = treatment, y = developmental_noise))+
+  ylab(expression(bold('Developmental noise')))+
+  geom_jitter(colour=d$color,width=0.35,alpha=0.3,shape=19)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold',
+              textsize = 8
+  )
+png('generated_plots/Developmental_noise.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p=ggplot()+
+  xlab("Developmental noise")+
+  ylab("Density")+
+  geom_density(data=dnS,aes(x = developmental_noise),colour='darkgray',lwd=2)+
+  geom_density(data=ds,aes(x = developmental_noise),colour='gold',lwd=2)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))
+png('generated_plots/dist_Developmental_noise.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p=ggplot(d,aes(x = treatment, y = bias_frac_time_on_shocked))+
+  ylab(expression(bold('Green bias')))+
+  geom_jitter(colour=d$color,width=0.35,alpha=0.3,shape=19)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold',
+              textsize = 8
+  )
+png('generated_plots/Green_biase.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p=ggplot()+
+  xlab("Green bias")+
+  ylab("Density")+
+  geom_density(data=dnS,aes(x = bias_frac_time_on_shocked),colour='darkgray',lwd=2)+
+  geom_density(data=ds,aes(x = bias_frac_time_on_shocked),colour='gold',lwd=2)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))
+png('generated_plots/dist_Green_bias.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+model=lmer(frac_time_on_shocked ~
+                genotype*treatment +
+                shock_sensitivity*sex+
+                developmental_noise +
+                starting_arm_code*treatment +
+                (1|gen_reps)+(1|id),
+              data=d)
+
+model = model
+anova(model)
+residuals=resid(model)
+png('generated_plots/frac_qq.png',600,600,'px',pointsize=12)
+qqnorm(residuals)
+qqline(residuals)
+dev.off()
+
+t.test(dnS$shock_sensitivity,ds$shock_sensitivity)
+t.test(dnS$shock_sensitivity,ds$shock_sensitivity)$p.val
+
+t.test(dnS$developmental_noise,ds$developmental_noise)
+t.test(dnS$developmental_noise,ds$developmental_noise)$p.val
+
+p=ggplot(LSM_frac, aes(x=reorder(genotype,estimate,na.rm=T), y=estimate))+xlab("Genotype")+ylab('Relative task performance')+
+  geom_hline(yintercept = 0, linetype = "dashed", lwd = 2)+
+  geom_ribbon(aes(x = rank(estimate), ymin=estimate - SE, ymax=estimate + SE,alpha=0.3))+
+  geom_point(shape=19, size=2, color="darkred",stroke = 1) +
+  coord_cartesian(clip = 'off')+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 20, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(legend.position = "none")+
+  scale_x_discrete(labels = str_pad(str_sub(levels(with(LSM_frac,reorder(genotype,estimate,na.rm=T))),5),3,'left','0'))
+
+png('generated_plots/frac_pL_green_genotype_score.png',2000,500,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+gens = str_pad(str_extract(LSM_frac_with_Control$genotype[order(LSM_frac_with_Control$estimate)],"[:digit:]+"),3,'left','0')
+gens[gens=='005']='ee5'
+gens[gens=='001']='dnc1'
+LSM_frac_with_Control$g = gens
+p=ggplot(LSM_frac_with_Control, aes(y=reorder(g,estimate,na.rm=T), x=estimate))+ylab("Genotype")+xlab('Relative task performance')+
+  geom_vline(xintercept = 0, linetype = "dashed", lwd = 2)+
+  geom_ribbon(aes(y = rank(estimate), xmin=estimate - SE, xmax=estimate + SE,alpha=0.3))+
+  geom_point(shape=19, size=6, color="darkred",stroke = 1) +
+  coord_cartesian(clip = 'off')+
+  geom_hline(yintercept = which(LSM_frac_with_Control$g=='ee5'),lwd=1.5,lty=4)+
+  geom_hline(yintercept = which(LSM_frac_with_Control$g=='dnc1'),lwd=1.5,lty=4)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 48, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 20, face='bold'))+
+  theme(axis.title.x = element_text(size = 56, face='bold'))+
+  theme(axis.title.y = element_text(size = 64, face='bold'))+
+  theme(legend.position = "none")+
+  scale_y_discrete(labels = LSM_frac_with_Control$g)
+
+png('generated_plots/frac_pL_green_genotype_score_with_Control.png',1000,2000,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+gens = str_pad(str_extract(LSM_frac_with_Control_blue$genotype[order(LSM_frac_with_Control_blue$estimate)],"[:digit:]+"),3,'left','0')
+gens[gens=='005']='ee5'
+gens[gens=='001']='dnc1'
+LSM_frac_with_Control_blue$g = gens
+p=ggplot(LSM_frac_with_Control_blue, aes(y=reorder(g,estimate,na.rm=T), x=estimate))+ylab("Genotype")+xlab('Relative task performance')+
+  geom_vline(xintercept = 0, linetype = "dashed", lwd = 2)+
+  geom_ribbon(aes(y = rank(estimate), xmin=estimate - SE, xmax=estimate + SE,alpha=0.3))+
+  geom_point(shape=19, size=6, color="darkred",stroke = 1) +
+  coord_cartesian(clip = 'off')+
+  geom_hline(yintercept = which(LSM_frac_with_Control_blue$g=='ee5'),lwd=1.5,lty=4)+
+  geom_hline(yintercept = which(LSM_frac_with_Control_blue$g=='dnc1'),lwd=1.5,lty=4)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 48, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 20, face='bold'))+
+  theme(axis.title.x = element_text(size = 56, face='bold'))+
+  theme(axis.title.y = element_text(size = 64, face='bold'))+
+  theme(legend.position = "none")+
+  scale_y_discrete(labels = LSM_frac_with_Control_blue$g)
+
+png('generated_plots/frac_pL_blue_genotype_score_with_Control.png',1000,1000,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+
+LSM_frac_dgrpool = data.frame(
+  DGRP = paste0('DGRP_',str_pad(str_sub(LSM_frac$genotype,5),3,'left','0')),
+  sex = LSM_frac$sex,
+  LSM = LSM_frac$estimate
+)
+write.table(LSM_frac_dgrpool,'generated_data/LSM_frac_dgrpool.tsv',sep='\t',row.names = FALSE,quote = FALSE,append = FALSE)
+
+
+
+```
+
+## Task performance
+
+The fraction of the total assay time spent on the shocked arm (T~shocked~) is indicative of the overall task performance of the flies in the conditioning task. The lower the T~shocked~, the better the fly's performance.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+p=ggplot(d,aes(x = treatment, y = frac_time_on_shocked))+
+  ylab(expression(bold('T'['shocked'])))+
+  geom_jitter(colour=d$color,width=0.35,alpha=0.3,shape=19)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              textsize = 8,
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05,"N.S."=2),
+              fontface = 'bold'
+  )
+png('generated_plots/Task_performance.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+t.test(dnS$frac_time_on_shocked,ds$frac_time_on_shocked)
+t.test(dnS$frac_time_on_shocked,ds$frac_time_on_shocked)$p.val
+```
+
+## Individuality in task performance
+
+Plotting the distributions of T~shocked~ for the genotypes, we see substantial intra-genotype variability, suggesting expressiong of genotype-specific individuality.
+
+The genotype-specific distribution shapes are replicated. (green: least entropic; blue: most entropic; gold: best performing)
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+p=ggplot()+
+  xlim(0,0.75)+
+  xlab(expression(bold('T'['shocked'])))+ylab(expression(bold("Density")))+
+  geom_density_ridges(data = ds, aes(x=frac_time_on_shocked,y=0), fill=alpha('gold',0.3), colour = alpha('gold',0.3))+
+  geom_density_ridges(data = dnS, aes(x=frac_time_on_shocked,y=0), fill=alpha('gray',0.2), colour = alpha('gray',0.2))+
+  geom_density(data = dnS, aes(x=frac_time_on_shocked, group=genotype),lwd = 0.5,colour=alpha('gray',0.8))+
+  geom_density(data = ds, aes(x=frac_time_on_shocked, group=genotype), lwd = 0.5,colour=alpha('gold',0.8))+
+  geom_vline(xintercept = mean(dnS$frac_time_on_shocked,na.rm=T), colour = 'gray', lwd = 2, lty = 2)+
+  geom_vline(xintercept = mean(ds$frac_time_on_shocked,na.rm=T), colour = 'gold', lwd = 2, lty = 2)+
+  geom_vline(xintercept = 1/3, lty = 2, lwd =1.5)+
+  geom_density(data = dnS[dnS$genotype=='dgrp362',], aes(x=frac_time_on_shocked, group=genotype),lwd = 2,lty=2,colour=alpha('black',1))+
+  geom_density(data = ds[ds$genotype=='dgrp362',], aes(x=frac_time_on_shocked, group=genotype), lwd = 2,colour=alpha('black',1))+
+  geom_density(data = dnS[dnS$genotype=='dgrp303',], aes(x=frac_time_on_shocked, group=genotype),lwd = 2,lty=2,colour=alpha('darkgreen',1))+
+  geom_density(data = ds[ds$genotype=='dgrp303',], aes(x=frac_time_on_shocked, group=genotype), lwd = 2,colour=alpha('darkgreen',1))+
+  geom_density(data = dnS[dnS$genotype=='dgrp354',], aes(x=frac_time_on_shocked, group=genotype),lwd = 2,lty=2,colour=alpha('blue',1))+
+  geom_density(data = ds[ds$genotype=='dgrp354',], aes(x=frac_time_on_shocked, group=genotype), lwd = 2,colour=alpha('blue',1))+
+  scale_x_continuous(limits=c(0,0.75),labels = c(0,0.15,round(mean(ds$frac_time_on_shocked,na.rm=T),2),round(mean(dnS$frac_time_on_shocked,na.rm=T),2),0.33,0.45,0.60,0.75),breaks = c(0,0.15,round(mean(ds$frac_time_on_shocked,na.rm=T),3),round(mean(dnS$frac_time_on_shocked,na.rm=T),3),0.333,0.45,0.60,0.75))+
+  
+  theme_minimal()+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90,vjust=0.5,size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32,face='bold'))+
+  theme(plot.title = element_text(size = 32,face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(panel.grid.minor = element_blank())
+
+png('generated_plots/density_Task_performance.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p=ggplot()+ #try and order by entropy/ma
+  xlim(0,0.75)+
+  xlab(expression(bold('T'['shocked'])))+ylab(expression(bold("Density")))+
+  geom_density(data = ds[ds$genotype == 'dgrp303',], aes(x=frac_time_on_shocked,group=replicates), colour = alpha('darkgreen',1),lwd=2)+
+  theme_minimal()+
+  geom_density(data = ds[ds$genotype == 'dgrp362',], aes(x=frac_time_on_shocked,group=replicates), colour = alpha('black',1),lwd=2)+
+  theme_minimal()+
+  geom_density(data = ds[ds$genotype == 'dgrp354',], aes(x=frac_time_on_shocked,group=replicates), colour = alpha('blue',1),lwd=2)+
+  theme_minimal()+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 0,size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32,face='bold'))+
+  theme(plot.title = element_text(size = 32,face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(panel.grid.minor = element_blank())
+
+png('generated_plots/density_rep_Task_performance.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+```
+
+## Behavioral sources of individuality
+
+Behaviors that potentially affect the task performance are:\
+1. decisions (percent correct choices)\
+2. difference in velocity of the fly on the shocked and non-shocked parts of the maze (relative activity)\
+3. locomotor handedness
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+ggplot()+
+  xlim(0,1)+
+  xlab(expression(bold('Percent correct')))+ylab(expression(bold("Density")))+
+  geom_density(data = dnS, aes(x=pCorrect,group=genotype), colour = alpha('darkgray',0.2))+
+  geom_density(data = ds, aes(x=pCorrect,group=genotype), colour = alpha('gold',0.2))+
+  theme_minimal()+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3, size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32,face='bold'))+
+  theme(plot.title = element_text(size = 32,face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(panel.grid.minor = element_blank())
+
+ggplot()+
+  xlim(-3,3)+
+  xlab(expression(bold('Relative velocity')))+ylab(expression(bold("Density")))+
+  geom_density(data = dnS, aes(x=rel_activity,group=genotype), colour = alpha('darkgray',0.2))+
+  geom_density(data = ds, aes(x=rel_activity,group=genotype), colour = alpha('gold',0.2))+
+  theme_minimal()+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3, size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32,face='bold'))+
+  theme(plot.title = element_text(size = 32,face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(panel.grid.minor = element_blank())
+
+ggplot()+
+  xlim(0,1)+
+  xlab(expression(bold('Locomotor handedness')))+ylab(expression(bold("Density")))+
+  geom_density(data = dnS, aes(x=handedness,group=genotype), colour = alpha('darkgray',0.2))+
+  geom_density(data = ds, aes(x=handedness,group=genotype), colour = alpha('gold',0.2))+
+  theme_minimal()+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.3, size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32,face='bold'))+
+  theme(plot.title = element_text(size = 32,face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(panel.grid.minor = element_blank())
+```
+
+## Individual and genotype-specific mean scores
+
+First we need to see if there is a difference in the individual scores and genotype-specific means between treatments.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw<-function(str,xlab=NA,ylab=NA){
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+  
+  p=ggplot(temp_d,aes(x = treatment, y = !!sym(str)))+
+    ylab(ifelse(is.na(ylab),str,ylab))+
+    geom_jitter(colour=temp_d$color,width=0.35,alpha=0.3,shape=19)+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    coord_cartesian(clip = 'off')+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                test = "t.test",
+                textsize=8,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                fontface = 'bold'
+  )
+  png(paste0('generated_plots/raw_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  print(t.test(dnS[,str],ds[,str]))
+  print(t.test(dnS[,str],ds[,str])$p.val)
+    
+}
+
+get_genotype_means<-function(str,ylab=NA){
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+  
+  gen=c()
+  mean=c()
+  var = c()
+  treatment=c()
+  for(e in unique(temp_d$genotype)){
+    for(t in c("shock","noShock")){
+      gen = c(gen,e)
+      treatment = c(treatment,t)
+      mean = c(mean, mean(temp_d[,str][temp_d$genotype == e & temp_d$treatment == t],na.rm=T))
+      var = c(var, var(temp_d[,str][temp_d$genotype == e & temp_d$treatment == t],na.rm=T))
+    }
+    gen = c(gen,e)
+    treatment = c(treatment,NA)
+    mean = c(mean, mean(temp_d[,str][temp_d$genotype == e],na.rm=T))
+    var = c(var, var(temp_d[,str][temp_d$genotype == e],na.rm=T))
+  }
+  
+  mean_df = data.frame(
+    genotype = gen,
+    treatment = treatment,
+    mean = mean,
+    var=var
+  )
+  mean_df$color = 'darkgray'
+  mean_df$color[!is.na(mean_df$treatment) & mean_df$treatment=='shock']='gold'
+  mean_df$color[is.na(mean_df$treatment)]='black'
+  cor = cor.test(mean_df$mean[!is.na(mean_df$treatment)&mean_df$treatment=='noShock'],mean_df$mean[!is.na(mean_df$treatment)&mean_df$treatment=='shock'])$estimate
+  pval = cor.test(mean_df$mean[!is.na(mean_df$treatment)&mean_df$treatment=='noShock'],mean_df$mean[!is.na(mean_df$treatment)&mean_df$treatment=='shock'])$p.value
+  p=ggplot(na.omit(mean_df),aes(x = treatment, y = mean))+
+  ylab(ifelse(is.na(ylab),paste("mean",str),ylab))+
+  geom_point(colour=na.omit(mean_df)$color,size=2)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  # stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red")+
+  geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+  annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\n p = ",round(pval,3)), x = Inf, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              textsize=8,
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold'
+  )
+  png(paste0('generated_plots/Mean_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  return(mean_df)
+}
+```
+
+## Measures of individuality
+
+Since the distributions are non-gaussian, traditional measures of variability will not work. Hence, we use Shanon's entropy (H) to estimate the amount of information encoded in each distribution binned in 10 bins.
+
+Entropy in the Control population estimates the amount of individuality expressed in bias behavior in the absence of conditioning.
+
+Entropy in the Conditioned population estimates the amount of individuality expressed in Conditioned behavior.
+
+Divergence (Kullback-Liebler) of Conditioned population w.r.t. the Control population estimates the "surprise" or the individuality expressed in the Conditioned population corrected for bias behavior.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+pseudo_zero = 1e-5
+densityfun <- function(x,low,high) {
+  d <- splinefun(density(x, from = low, to = high, n = 10000L))
+  dnz <- function(z) ifelse(z < low | z > high, 0, pmax(d(z), 0))
+  norm <- integrate(dnz, low, high, abs.tol = 1e-12, stop.on.error = F)$value
+  function(z) dnz(z)/norm
+}
+get_mixed_pdf<-function(x,y,low,high){
+  q<-densityfun(x,low,high)
+  p<-densityfun(y,low,high)
+  function(z) 0.5*(q(z)+p(z))
+}
+get_cont_entropy <- function(x,low,high) {
+  q <- densityfun(x,low,high)
+  integrate(function(z) ifelse(q(z)==0,0,-q(z)*log(q(z))), low, high,subdivisions = 10000L, stop.on.error = F)$value
+}
+get_hellinger <- function(x, y,low,high) {
+  q <- densityfun(x,low,high)
+  p <- densityfun(y,low,high)
+  1 - integrate(function(z) sqrt(q(z)*p(z)), low, high,subdivisions = 10000L, stop.on.error = F)$value
+}
+get_kl = function(x,y,low,high){
+  q <- densityfun(x, low, high)
+  p <- densityfun(y, low, high)
+  integrate(function(z) ifelse(q(z) == 0, 0, ifelse(p(z) == 0, q(z)*(log(q(z)) - log(pseudo_zero)), q(z)*(log(q(z)) - log(p(z))))), low, high,subdivisions = 10000L)$value
+}
+get_jsd = function(x,y,low,high){
+  q<-densityfun(x,low,high)
+  p<-densityfun(y,low,high)
+  m<-get_mixed_pdf(x,y,low,high)
+  kl_qm = integrate(function(z) ifelse(q(z) == 0, 0, ifelse(m(z) == 0, q(z)*(log(q(z)) - log(pseudo_zero)), q(z)*(log(q(z)) - log(m(z))))), low, high,subdivisions = 10000L)$value
+  kl_pm = integrate(function(z) ifelse(p(z) == 0, 0, ifelse(m(z) == 0, p(z)*(log(p(z)) - log(pseudo_zero)), p(z)*(log(p(z)) - log(m(z))))), low, high,subdivisions = 10000L)$value
+  jsd = sqrt(0.5*(kl_qm + kl_pm))
+  return(jsd)
+}
+get_centered_hellinger <- function(x, y, low, high) {
+  mx <- median(x)
+  my <- median(y)
+  q <- densityfun(x-mx, low-high, high-low)
+  p <- densityfun(y-my, low-high, high-low)
+  1 - integrate(function(z) sqrt(q(z) * p(z)), low-high, high-low, abs.tol = 1e-12)$value
+}
+get_centered_kl = function(x,y,low,high){
+  mx <- median(x)
+  my <- median(y)
+  q <- densityfun(x-mx, low-high, high-low)
+  p <- densityfun(y-my, low-high, high-low)
+  integrate(function(z) ifelse(q(z) == 0, 0, ifelse(p(z) == 0, q(z)*(log(q(z)) - log(pseudo_zero)), q(z)*(log(q(z)) - log(p(z))))), low-high, high-low,subdivisions = 10000L)$value
+}
+get_centered_jsd = function(x,y,low,high){
+  mx <- median(x)
+  my <- median(y)
+  q <- densityfun(x-mx, low-high, high-low)
+  p <- densityfun(y-my, low-high, high-low)
+  m<-get_mixed_pdf(x-mx,y-my,low-high,high-low)
+  kl_qm = integrate(function(z) ifelse(q(z) == 0, 0, ifelse(m(z) == 0, q(z)*(log(q(z)) - log(pseudo_zero)), q(z)*(log(q(z)) - log(m(z))))), low-high, high-low,subdivisions = 10000L)$value
+  kl_pm = integrate(function(z) ifelse(p(z) == 0, 0, ifelse(m(z) == 0, p(z)*(log(p(z)) - log(pseudo_zero)), p(z)*(log(p(z)) - log(m(z))))), low-high, high-low,subdivisions = 10000L)$value
+  jsd = sqrt(0.5*(kl_qm + kl_pm))
+  return(jsd)
+}
+
+get_entropy <-function(str,ylab=NA){
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+
+  low = switch(str,
+               "frac_time_on_shocked" = 0,
+               "ls" = -1,
+               "pCorrect" = 0,
+               "rel_activity" = -8,
+               "handedness" = 0,
+               "activity" = 0,
+               "bias_frac_time_on_shocked" = 0,
+               "developmental_noise" = 0,
+               "shock_sensitivity" = 0, # -8?
+               "frac_change" = -1,
+               "pCorrect_change" = -1,
+               "handedness_change" = -1,
+               "rel_activity_change" = -8
+  )
+  high = switch(str,
+                "frac_time_on_shocked" = 1,
+                "ls" = 1,
+                "pCorrect" = 1,
+                "rel_activity" = 8,
+                "handedness" = 1,
+                "activity" = 8,
+                "bias_frac_time_on_shocked" = 1,
+                "developmental_noise" = 1,
+                "shock_sensitivity" = 8,
+                "frac_change" = 1,
+                "pCorrect_change" = 1,
+                "handedness_change" = 1,
+                "rel_activity_change" = 8
+  )
+  
+  numbins =10
+  numbinsSex=5
+  numreps = 10
+  numreps_mf = 5
+  
+  genotype = c()
+  treatment = c()
+  en = c()
+  resid_en = c()
+  for(e in unique(ds$genotype)){
+    dist_s = ds[ds$genotype==e,str]
+    en = c(en,get_cont_entropy(dist_s,low,high))
+    dist_s = discretize(dist_s,numBins = numbins)
+    resid_en = c(resid_en,entropy(dist_s,na.rm=T))
+    genotype = c(genotype,e)
+    treatment = c(treatment,"shock")
+
+    dist_ns = dnS[dnS$genotype==e,str]
+    en = c(en,get_cont_entropy(dist_ns,low,high))
+    dist_ns = discretize(dist_ns,numBins = numbins)
+    resid_en = c(resid_en,entropy(dist_ns,na.rm=T))
+    genotype = c(genotype,e)
+    treatment = c(treatment,"noShock")
+
+    dist = temp_d[temp_d$genotype==e,str]
+    en = c(en,get_cont_entropy(dist,low,high))
+    dist = discretize(dist,numBins = numbins)
+    resid_en=c(resid_en,entropy(dist,na.rm=T))
+    genotype = c(genotype,e)
+    treatment = c(treatment,NA)
+  }
+  
+  entropy_df = data.frame(
+    genotype = genotype,
+    treatment = treatment,
+    entropy = en,
+    resid_entropy = resid_en
+  )
+  
+  entropy_df$color='darkgray'
+  entropy_df$color[!is.na(entropy_df$treatment) & entropy_df$treatment=='shock']='gold'
+  entropy_df$color[is.na(entropy_df$treatment)]='black'
+  
+  cor = cor.test(entropy_df$entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='noShock'],entropy_df$entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='shock'])$estimate
+  pval = cor.test(entropy_df$entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='noShock'],entropy_df$entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='shock'])$p.value
+  
+  p<-ggplot(na.omit(entropy_df),aes(x = treatment, y = entropy))+
+    ylab(bquote(bold('H'~.(ylab))))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    geom_point(colour = na.omit(entropy_df)$color,size=2)+
+    geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+    annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\n p = ",round(pval,3)), x = Inf, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+    stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                test = "t.test",
+                textsize = 8,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                fontface = 'bold'
+    )
+  png(paste0('generated_plots/entropy_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+
+  cor = cor.test(entropy_df$resid_entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='noShock'],entropy_df$resid_entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='shock'])$estimate
+  pval = cor.test(entropy_df$resid_entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='noShock'],entropy_df$resid_entropy[!is.na(entropy_df$treatment)&entropy_df$treatment=='shock'])$p.value
+  
+  p<-ggplot(na.omit(entropy_df),aes(x = treatment, y = resid_entropy))+
+    ylab(bquote(bold('H'['resid']~.(ylab))))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    geom_point(colour = na.omit(entropy_df)$color,size=2)+
+    geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+    annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\n p = ",round(pval,3)), x = Inf, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+    stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                test = "t.test",
+                textsize = 8,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                fontface = 'bold'
+    )
+  png(paste0('generated_plots/resid_entropy_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  return(entropy_df)
+}
+
+get_divergence <-function(str,ylab=NA){
+  
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+
+  low = switch(str,
+               "frac_time_on_shocked" = 0,
+               "ls" = -1,
+               "pCorrect" = 0,
+               "rel_activity" = -8,
+               "handedness" = 0,
+               "activity" = 0,
+               "bias_frac_time_on_shocked" = 0,
+               "developmental_noise" = 0,
+               "shock_sensitivity" = 0, # -8?
+               "frac_change" = -1,
+               "pCorrect_change" = -1,
+               "handedness_change" = -1,
+               "rel_activity_change" = -8
+  )
+  high = switch(str,
+                "frac_time_on_shocked" = 1,
+                "ls" = 1,
+                "pCorrect" = 1,
+                "rel_activity" = 8,
+                "handedness" = 1,
+                "activity" = 8,
+                "bias_frac_time_on_shocked" = 1,
+                "developmental_noise" = 1,
+                "shock_sensitivity" = 8,
+                "frac_change" = 1,
+                "pCorrect_change" = 1,
+                "handedness_change" = 1,
+                "rel_activity_change" = 8
+  )
+  
+  numbins =10
+  numbinsSex=5
+  numreps = 10
+  numreps_mf = 5
+  
+  genotype = c()
+  sex = c()
+  kl = c()
+  hell = c()
+  for(e in unique(ds$genotype)){
+    dist_s = ds[ds$genotype==e,str]
+    dist_ns = dnS[dnS$genotype==e,str]
+    hell = c(hell,get_hellinger(dist_s,dist_ns,low,high))
+    dist_s = discretize(dist_s,numBins = numbins)
+    dist_ns = discretize(dist_ns,numBins = numbins)
+    dist_s = dist_s/sum(dist_s)
+    dist_ns = dist_ns/sum(dist_ns)
+    kl = c(kl,KL(rbind(dist_s,dist_ns),unit='log'))
+    genotype = c(genotype,e)
+  }
+  
+  div_df = data.frame(
+    genotype = genotype,
+    ev=kl,
+    hell_ev = hell
+  )
+  div_df$treatment = NA
+  div_df$color = 'black'
+  
+  p=ggplot()+
+    ylab(bquote(bold('EV'~.(ylab))))+
+    geom_point(data=div_df, aes(x=reorder(genotype,ev),y=ev),size=3)+
+    scale_x_discrete(labels = str_pad(str_sub(levels(with(div_df,reorder(genotype,ev,na.rm=T))),5),3,'left','0'), name = "Genotypes")+
+    theme_minimal()+
+    theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    theme(legend.text=element_text(size = 32))+
+    theme(legend.title=element_text(size = 32))
+  png(paste0('generated_plots/EV_',str,'.png'),2000,500,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot()+
+    ylab(bquote(bold('Hellinger'~.(ylab))))+
+    geom_point(data=div_df, aes(x=reorder(genotype,hell_ev),y=hell_ev),size=3)+
+    scale_x_discrete(labels = str_pad(str_sub(levels(with(div_df,reorder(genotype,hell_ev,na.rm=T))),5),3,'left','0'), name = "Genotypes")+
+    theme_minimal()+
+    theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    theme(legend.text=element_text(size = 32))+
+    theme(legend.title=element_text(size = 32))
+  png(paste0('generated_plots/Hellinger_',str,'.png'),2000,500,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  return(div_df)
+}
+
+```
+
+## Developmental individuality
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+get_replicates_scores <- function(str,ylab=NA){
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+
+  low = switch(str,
+               "frac_time_on_shocked" = 0,
+               "ls" = -1,
+               "pCorrect" = 0,
+               "rel_activity" = -8,
+               "handedness" = 0,
+               "activity" = 0,
+               "bias_frac_time_on_shocked" = 0,
+               "developmental_noise" = 0,
+               "shock_sensitivity" = 0, # -8?
+               "frac_change" = -1,
+               "pCorrect_change" = -1,
+               "handedness_change" = -1,
+               "rel_activity_change" = -8
+  )
+  high = switch(str,
+                "frac_time_on_shocked" = 1,
+                "ls" = 1,
+                "pCorrect" = 1,
+                "rel_activity" = 8,
+                "handedness" = 1,
+                "activity" = 8,
+                "bias_frac_time_on_shocked" = 1,
+                "developmental_noise" = 1,
+                "shock_sensitivity" = 8,
+                "frac_change" = 1,
+                "pCorrect_change" = 1,
+                "handedness_change" = 1,
+                "rel_activity_change" = 8
+  )
+  
+  numbins =10
+  numbinsSex=5
+  numreps = 10
+  numreps_mf = 5
+  
+  genotype = c()
+  treatment = c()
+  resid_en_r1 = c()
+  resid_en_r2 = c()
+  en_r1 = c()
+  en_r2 = c()
+  mean_r1 = c()
+  mean_r2 = c()
+  var_r1 = c()
+  var_r2 = c()
+  kl = c()
+  hell = c()
+  mi=c()
+  pval=c()
+  
+  for(gen in unique(d$genotype)){
+    for(tr in c('shock','noShock')){
+      dist_r1 = temp_d[temp_d$genotype==gen & temp_d$treatment==tr & temp_d$replicates==1,][,str]
+      dist_r2 = temp_d[temp_d$genotype==gen & temp_d$treatment==tr & temp_d$replicates==2,][,str]
+      
+      mean_r1 = c(mean_r1, mean(dist_r1,na.rm=T))
+      mean_r2 = c(mean_r2, mean(dist_r2,na.rm=T))
+      
+      var_r1 = c(var_r1, var(dist_r1,na.rm=T))
+      var_r2 = c(var_r2, var(dist_r2,na.rm=T))
+      
+      en_r1 = c(en_r1,get_cont_entropy(dist_r1,low,high))
+      en_r2 = c(en_r2,get_cont_entropy(dist_r2,low,high))
+      
+      hell = c(hell,get_hellinger(dist_r1,dist_r2,low,high))
+      
+      pval=c(pval,pvalue(independence_test(as.formula(paste0(str,'~replicates')),temp_d[temp_d$genotype==gen & temp_d$treatment==tr,]),distribution="exact"))
+      
+      dist_r1 = discretize(dist_r1,numBins = numreps)
+      dist_r2 = discretize(dist_r2,numBins = numreps)
+      resid_en_r1=c(resid_en_r1,entropy(dist_r1,na.rm=T))
+      resid_en_r2=c(resid_en_r2,entropy(dist_r2,na.rm=T))
+      mi = c(mi,MutInf(dist_r1,dist_r2,base = exp(1)))
+      
+      dist_r1 = dist_r1/sum(dist_r1)
+      dist_r2 = dist_r2/sum(dist_r2)
+      kl = c(kl,KL(rbind(dist_r1,dist_r2),unit='log'))
+      
+      genotype = c(genotype,gen)
+      treatment = c(treatment,tr)
+    }
+  }
+  rep_df = data.frame(
+    genotype = genotype,
+    treatment = treatment,
+    en_r1 = en_r1,
+    en_r2 = en_r2,
+    resid_en_r1 = resid_en_r1,
+    resid_en_r2 = resid_en_r2,
+    MV = kl,
+    hell_rep = hell,
+    MI_rep = mi,
+    mean_r1 = mean_r1,
+    mean_r2 = mean_r2,
+    var_r1 = var_r1,
+    var_r2 = var_r2,
+    perm.pval_rep = pval
+  )
+  
+  rep_df$color = 'darkgray'
+  rep_df$color[rep_df$treatment=='shock']='gold'
+  
+  p=ggplot(rep_df[rep_df$treatment=='noShock',],aes(x=mean_r1,y=mean_r2))+
+    ggtitle(paste("Control"))+
+    xlab("Mean (Replicate 1)")+
+    ylab("Mean (Replicate 2)")+
+    geom_point(colour='darkgrey',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/noShock_mean_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='shock',],aes(x=mean_r1,y=mean_r2))+
+    ggtitle(paste("Conditioned"))+
+    xlab("Mean (Replicate 1)")+
+    ylab("Mean (Replicate 2)")+
+    geom_point(colour='gold',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/shock_mean_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='noShock',],aes(x=var_r1,y=var_r2))+
+    ggtitle(paste("Control"))+
+    xlab("Variance (Replicate 1)")+
+    ylab("Variance (Replicate 2)")+
+    geom_point(colour='darkgrey',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/noShock_var_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='shock',],aes(x=var_r1,y=var_r2))+
+    ggtitle(paste("Conditioned"))+
+    xlab("Variance (Replicate 1)")+
+    ylab("Variance (Replicate 2)")+
+    geom_point(colour='gold',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/shock_var_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='noShock',],aes(x=resid_en_r1,y=resid_en_r2))+
+    ggtitle(paste("Control"))+
+    xlab(expression(bold('H'['resid']*' (Replicate 1)')))+
+    ylab(expression(bold('H'['resid']*' (Replicate 2)')))+
+    geom_point(colour='darkgrey',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/noShock_resid_entropy_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='shock',],aes(x=resid_en_r1,y=resid_en_r2))+
+    ggtitle(paste("Conditioned"))+
+    xlab(expression(bold('H'['resid']*' (Replicate 1)')))+
+    ylab(expression(bold('H'['resid']*' (Replicate 2)')))+
+    geom_point(colour='gold',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/shock_resid_entropy_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='noShock',],aes(x=en_r1,y=en_r2))+
+    ggtitle(paste("Control"))+
+    xlab(expression(bold('H (Replicate 1)')))+
+    ylab(expression(bold('H (Replicate 2)')))+
+    geom_point(colour='darkgrey',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/noShock_entropy_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(rep_df[rep_df$treatment=='shock',],aes(x=en_r1,y=en_r2))+
+    ggtitle(paste("Conditioned"))+
+    xlab(expression(bold('H (Replicate 1)')))+
+    ylab(expression(bold('H (Replicate 2)')))+
+    geom_point(colour='gold',size=4)+
+    stat_poly_line()+
+    stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_text(size = 32, face='bold'))+
+    theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+  png(paste0('generated_plots/shock_entropy_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+
+  p<-ggplot(rep_df,aes(x = treatment, y = MV))+
+    ylab(bquote(bold('MV'~.(ylab))))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    geom_point(color=rep_df$color,size=2)+
+    geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 48, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                textsize = 8,
+                fontface = 'bold',
+                test = "t.test"
+    )
+  png(paste0('generated_plots/MV_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p<-ggplot(rep_df,aes(x = treatment, y = hell_rep))+
+    ylab(bquote(bold('Hellinger'~.(ylab))))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    geom_point(color=rep_df$color,size=2)+
+    geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 48, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                textsize = 8,
+                fontface = 'bold',
+                test = "t.test"
+    )
+  png(paste0('generated_plots/Hellinger_rep_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p<-ggplot(rep_df,aes(x = treatment, y = MI_rep))+
+    ylab(bquote(bold('MI'~.(ylab))))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    geom_point(color=rep_df$color)+
+    geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+    stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 32, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                na.rm = TRUE,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+  fontface = 'bold',
+                test = "t.test"
+    )
+  png(paste0('generated_plots/MI_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  return(rep_df)
+}
+
+```
+
+## Genetic individuality
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+get_GV<-function(str,ylab=NA){
+  temp_d = d[!is.na(d[,str]),]
+  ds = temp_d[temp_d$treatment=="shock",]
+  dnS = temp_d[temp_d$treatment=="noShock",]
+
+  low = switch(str,
+               "frac_time_on_shocked" = 0,
+               "ls" = -1,
+               "pCorrect" = 0,
+               "rel_activity" = -8,
+               "handedness" = 0,
+               "activity" = 0,
+               "bias_frac_time_on_shocked" = 0,
+               "developmental_noise" = 0,
+               "shock_sensitivity" = 0, # -8?
+               "frac_change" = -1,
+               "pCorrect_change" = -1,
+               "handedness_change" = -1,
+               "rel_activity_change" = -8
+  )
+  high = switch(str,
+                "frac_time_on_shocked" = 1,
+                "ls" = 1,
+                "pCorrect" = 1,
+                "rel_activity" = 8,
+                "handedness" = 1,
+                "activity" = 8,
+                "bias_frac_time_on_shocked" = 1,
+                "developmental_noise" = 1,
+                "shock_sensitivity" = 8,
+                "frac_change" = 1,
+                "pCorrect_change" = 1,
+                "handedness_change" = 1,
+                "rel_activity_change" = 8
+  )
+  
+  numbins =10
+  numbinsSex=5
+  numreps = 10
+  numreps_mf = 5
+  
+  genotype = c()
+  kl_s = c()
+  hell_s = c()
+  kl_ns = c()
+  hell_ns = c()
+  gens = unique(ds$genotype)
+  combs = combinations(length(gens),2,gens)
+  for(i in 1:length(combs[,1])){
+    e1 = combs[i,1]
+    e2 = combs[i,2]
+    
+    dist_1 = discretize(ds[ds$genotype==e1,][,str],numBins = numbins)
+    dist_2 = discretize(ds[ds$genotype==e2,][,str],numBins = numbins)
+    dist_1 = dist_1/sum(dist_1)
+    dist_2 = dist_2/sum(dist_2)
+    kl_s = c(kl_s,KL(rbind(dist_1,dist_2),unit='log'))
+    hell_s = c(hell_s, get_hellinger(ds[ds$genotype==e1,][,str],ds[ds$genotype==e2,][,str],low,high))
+    
+    dist_1 = discretize(dnS[dnS$genotype==e1,][,str],numBins = numbins)
+    dist_2 = discretize(dnS[dnS$genotype==e2,][,str],numBins = numbins)
+    dist_1 = dist_1/sum(dist_1)
+    dist_2 = dist_2/sum(dist_2)
+    kl_ns = c(kl_ns,KL(rbind(dist_1,dist_2),unit='log'))
+    hell_ns = c(hell_ns, get_hellinger(dnS[dnS$genotype==e1,][,str],dnS[dnS$genotype==e2,][,str],low,high))
+    
+    genotype = c(genotype,paste0(e1,'_',e2))
+  }
+  
+  between_gen_kl = data.frame(
+    comp = genotype,
+    kl_s = kl_s,
+    kl_ns = kl_ns,
+    hell_gv_s = hell_s,
+    hell_gv_ns = hell_ns
+  )
+  
+  genotype = c(genotype,genotype)
+  treatment = c(rep('shock',length(kl_s)),rep('noShock',length(kl_ns)))
+  kl = c(kl_s,kl_ns)
+  hell_gv = c(hell_s,hell_ns)
+  
+  between_gen_kl = data.frame(
+    comb = genotype,
+    treatment = treatment,
+    GV = kl,
+    hell_gv = hell_gv
+  )
+  
+  between_gen_kl$color = 'darkgray'
+  between_gen_kl$color[between_gen_kl$treatment=='shock']='gold'
+  
+  p=ggplot(between_gen_kl,aes(x = treatment, y = GV))+
+    ylab(bquote(bold('GV'~.(ylab))))+
+    geom_jitter(colour=between_gen_kl$color,width=0.35,alpha=0.3,shape=19)+
+    # geom_line(aes(group=comb),colour=alpha("darkgray",0.1))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    # stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 48, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                # na.rm = FALSE,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                fontface = 'bold',
+                test = "t.test",
+                textsize = 8
+    )
+  png(paste0('generated_plots/GV_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot(between_gen_kl,aes(x = treatment, y = hell_gv))+
+    ylab(bquote(bold('Hellinger'~.(ylab))))+
+    geom_jitter(colour=between_gen_kl$color,width=0.35,alpha=0.3,shape=19)+
+    # geom_line(aes(group=comb),colour=alpha("darkgray",0.1))+
+    geom_boxplot(outlier.shape = NA,alpha=0)+
+    # stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+    scale_x_discrete(labels=c('Control','Conditioned'))+
+    theme_minimal()+
+    theme(axis.text.x = element_text(size = 32, face='bold'))+
+    theme(axis.text.y = element_text(size = 32, face='bold'))+
+    theme(plot.title = element_text(size = 32, face='bold'))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_text(size = 48, face='bold'))+
+    stat_signif(comparisons = list(c('noShock','shock')),
+                # na.rm = FALSE,
+                map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+                fontface = 'bold',
+                test = "t.test",
+                textsize = 8
+    )
+  png(paste0('generated_plots/Hellinger_GV_',str,'.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+
+  return(between_gen_kl)
+}
+
+```
+
+## Learning score:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+p=ggplot(d,aes(x = treatment, y = ls))+
+  ylab("Learning score")+
+  geom_jitter(colour=d$color,width=0.35,alpha=0.3,shape=19)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  stat_summary(fun=mean, geom="pointrange", shape=3, size=2, lwd = 2, color="red") +
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              textsize = 8,
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold'
+  )
+png('generated_plots/Learning_score.png',600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+```
+
+## Task performance:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+plot_raw(str='frac_time_on_shocked',ylab=expression(bold('T'['shocked'])))
+mean_frac = get_genotype_means(str='frac_time_on_shocked',ylab=expression(bold('Mean T'['shocked'])))
+
+en_frac = get_entropy("frac_time_on_shocked",ylab=bquote(bold('T'['shocked'])))
+div_frac = get_divergence("frac_time_on_shocked",ylab=bquote(bold('T'['shocked'])))
+reps_frac = get_replicates_scores('frac_time_on_shocked',ylab=bquote(bold('T'['shocked'])))
+GV_frac=get_GV('frac_time_on_shocked',ylab=bquote(bold('T'['shocked'])))
+
+grand_frac = full_join(mean_frac,full_join(en_frac,full_join(div_frac,reps_frac,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_frac, file = "grand_frac.csv", sep = ',', row.names = F,append = F, quote = F)
+```
+
+## Learning score:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='ls',ylab='LS')
+mean_ls = get_genotype_means(str='ls',ylab='Mean LS')
+
+en_ls = get_entropy("ls",ylab=bquote(bold('LS')))
+div_ls = get_divergence("ls",ylab=bquote(bold('LS')))
+reps_ls = get_replicates_scores('ls',ylab=bquote(bold('LS')))
+GV_ls=get_GV('ls',ylab=bquote(bold('LS')))
+
+grand_ls = full_join(mean_ls,full_join(en_ls,full_join(div_ls,reps_ls,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_ls, file = "grand_ls.csv", sep = ',', row.names = F, append = F, quote = F)
+```
+
+## Percent correct:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='pCorrect',ylab='Percent correct')
+mean_pc = get_genotype_means(str='pCorrect',ylab='Mean Percent correct')
+
+en_pc = get_entropy("pCorrect",ylab=bquote(bold('Percent correct')))
+div_pc = get_divergence("pCorrect",ylab=bquote(bold('Percent correct')))
+reps_pc = get_replicates_scores('pCorrect',ylab=bquote(bold('Percent correct')))
+GV_pc=get_GV('pCorrect',ylab=bquote(bold('Percent correct')))
+
+grand_pc = full_join(mean_pc,full_join(en_pc,full_join(div_pc,reps_pc,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_pc, file = "grand_pc.csv", append = F, sep = ',', row.names = F, quote = F)
+```
+
+## Relative activity:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='rel_activity',ylab='Relative velocity')
+mean_relAc = get_genotype_means(str='rel_activity',ylab='Mean Relative velocity')
+
+en_relAc = get_entropy("rel_activity",ylab=bquote(bold('Relative velocity')))
+div_relAc = get_divergence("rel_activity",ylab=bquote(bold('Relative velocity')))
+reps_relAc = get_replicates_scores('rel_activity',ylab=bquote(bold('Relative velocity')))
+GV_relAc=get_GV('rel_activity',ylab=bquote(bold('Relative velocity')))
+
+grand_relAc = full_join(mean_relAc,full_join(en_relAc,full_join(div_relAc,reps_relAc,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_relAc, file = "grand_relAc.csv", sep = ',', row.names = F, append = F, quote = F)
+```
+
+## Absolute handedness:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='handedness',ylab='Handedness')
+mean_hand = get_genotype_means(str='handedness',ylab='Mean Handedness')
+
+en_hand = get_entropy("handedness",ylab='Handedness')
+div_hand = get_divergence("handedness",ylab='Handedness')
+reps_hand = get_replicates_scores('handedness',ylab='Handedness')
+GV_hand=get_GV('handedness',ylab='Handedness')
+
+grand_hand = full_join(mean_hand,full_join(en_hand,full_join(div_hand,reps_hand,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_hand, file = "grand_hand.csv", sep = ',', row.names = F, append = F, quote = F)
+```
+
+## Activity:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+plot_raw(str='activity',ylab='Velocity')
+mean_Ac = get_genotype_means(str='activity',ylab='Mean Velocity')
+
+en_Ac = get_entropy("activity",ylab='Velocity')
+div_Ac = get_divergence("activity",ylab='Velocity')
+reps_Ac = get_replicates_scores('activity',ylab='Velocity')
+GV_Ac=get_GV('activity',ylab='Velocity')
+
+grand_Ac = full_join(mean_Ac,full_join(en_Ac,full_join(div_Ac,reps_Ac,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_Ac, file = "grand_Ac.csv", sep = ',', row.names = F, append = F, quote = F)
+```
+
+## Green bias, shock response, and developmental noise:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+
+plot_raw(str='bias_frac_time_on_shocked',ylab='Green bias')
+mean_bias = get_genotype_means(str='bias_frac_time_on_shocked',ylab=expression(bold('Mean Green bias')))
+
+en_bias = get_entropy("bias_frac_time_on_shocked",ylab='Green bias')
+div_bias = get_divergence("bias_frac_time_on_shocked",ylab='Green bias')
+reps_bias = get_replicates_scores('bias_frac_time_on_shocked',ylab='Green bias')
+GV_bias=get_GV('bias_frac_time_on_shocked',ylab='Green bias')
+
+grand_bias = full_join(mean_bias,full_join(en_bias,full_join(div_bias,reps_bias,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_bias, file = "grand_bias.csv", sep = ',', row.names = F, append = F, quote = F)
+
+
+plot_raw(str='developmental_noise',ylab='Developmental noise')
+mean_dn = get_genotype_means(str='developmental_noise',ylab=expression(bold('Mean Developmental noise')))
+
+en_dn = get_entropy("developmental_noise",ylab='Developmental noise')
+div_dn = get_divergence("developmental_noise",ylab='Developmental noise')
+reps_dn = get_replicates_scores('developmental_noise',ylab='Developmental noise')
+GV_dn=get_GV('developmental_noise',ylab='Developmental noise')
+
+grand_dn = full_join(mean_dn,full_join(en_dn,full_join(div_dn,reps_dn,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_dn, file = "grand_dn.csv", sep = ',', row.names = F, append = F, quote = F)
+
+plot_raw(str='shock_sensitivity',ylab='Shock response')
+mean_ss = get_genotype_means(str='shock_sensitivity',ylab=expression(bold('Mean Shock response')))
+
+en_ss = get_entropy("shock_sensitivity",ylab='Shock response')
+div_ss = get_divergence("shock_sensitivity",ylab='Shock response')
+reps_ss = get_replicates_scores('shock_sensitivity',ylab='Shock response')
+GV_ss=get_GV('shock_sensitivity',ylab='Shock response')
+
+grand_ss = full_join(mean_ss,full_join(en_ss,full_join(div_ss,reps_ss,by=c('genotype','treatment','color')),by=c('genotype','treatment','color')), by = c('genotype','treatment','color'))
+
+write.table(grand_ss, file = "grand_ss.csv", sep = ',', row.names = F, append = F, quote = F)
+```
+
+## Change in behavior
+
+Difference in behavior between the first and last quarter of the conditioning
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='frac_change',ylab='frac_change')
+mean_frac_change = get_genotype_means(str='frac_change',ylab='Mean frac_change')
+
+en_frac_change = get_entropy("frac_change",ylab='frac_change')
+div_frac_change = get_divergence("frac_change",ylab='frac_change')
+reps_frac_change = get_replicates_scores('frac_change',ylab='frac_change')
+GV_frac_change = get_GV('frac_change',ylab='frac_change')
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='pCorrect_change',ylab='pCorrect_change')
+mean_pc_change = get_genotype_means(str='pCorrect_change',ylab='Mean pCorrect_change')
+
+en_pc_change = get_entropy("pCorrect_change",ylab='pCorrect_change')
+div_pc_change = get_divergence("pCorrect_change",ylab='pCorrect_change')
+reps_pc_change = get_replicates_scores('pCorrect_change',ylab='pCorrect_change')
+GV_pc_change = get_GV('pCorrect_change',ylab='pCorrect_change')
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='handedness_change',ylab='handedness_change')
+mean_hand_change = get_genotype_means(str='handedness_change',ylab='Mean handedness_change')
+
+en_hand_change = get_entropy("handedness_change",ylab='handedness_change')
+div_hand_change = get_divergence("handedness_change",ylab='handedness_change')
+reps_hand_change = get_replicates_scores('handedness_change',ylab='handedness_change')
+GV_hand_change = get_GV('handedness_change',ylab='handedness_change')
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+plot_raw(str='rel_activity_change',ylab='rel_activity_change')
+mean_relAc_change = get_genotype_means(str='rel_activity_change',ylab='Mean rel_activity_change')
+
+en_relAc_change = get_entropy("rel_activity_change",ylab='rel_activity_change')
+div_relAc_change = get_divergence("rel_activity_change",ylab='rel_activity_change')
+reps_relAc_change = get_replicates_scores('rel_activity_change',ylab='rel_activity_change')
+GV_relAc_change = get_GV('rel_activity_change',ylab='rel_activity_change')
+```
+
+## Divergence per decision
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+divergence_per_decision<-function(dd,maxD,str=""){
+  d_fracs = list()
+  d_pc = list()
+  d_hand = list()
+  low = 0
+  high = 1
+  numbins=10
+  maxTime = 1200
+  d_dc = dd[dd$total_choices>=maxD,]
+  
+  for(i in 1:length(d_dc$id)){
+    t = as.numeric(unlist(str_split(d_dc$decision_seq[[i]],':'))[c( TRUE,rep(FALSE, 3))])
+    col = unlist(str_split(d_dc$decision_seq[[i]],':'))[c(FALSE,FALSE,TRUE,FALSE)]
+    col = na.omit(col[c(t<=maxTime,TRUE)])
+    shock = unlist(str_split(d_dc$decision_seq[[i]],':'))[c(FALSE,FALSE,FALSE,TRUE)]
+    shock = na.omit(shock[c(t<=maxTime,TRUE)])
+    turns=unlist(str_split(d_dc$decision_seq[[i]],':'))[c(FALSE,TRUE,FALSE,FALSE)]
+    turns= na.omit(turns[c(t<=maxTime,TRUE)])
+    turns = replace(turns, turns=='left', 1)
+    turns = replace(turns, turns=='right', -1)
+    turns = as.numeric(turns)
+    col = replace(col,col=='B','blue')
+    col = replace(col,col=='G','green')
+    shock = replace(shock, shock == 'X', 1)
+    shock = replace(shock, shock == 'O', 0)
+    shock = as.numeric(shock)
+    t = na.omit(t[t<=maxTime])
+    dp = (1:length(t))/length(t)
+    
+    col = c(ifelse(!is.na(d_dc$starting_color[i])&d_dc$starting_color[i]=='G','green','blue'),col)
+    t = c(0,t)
+    turns = c(NA,turns)
+    shock = c(ifelse(!is.na(d_dc$starting_color[i])&d_dc$starting_color[i]=='G',1,0),shock)
+    t_spent = c(t[-1]-t[-length(t)],maxTime-t[length(t)])
+    
+    # this frac will not match frac_time_on_shocked as this does not consider time on X. This is just based on delta t
+    f = c()
+    for(j in 1:length(t)){
+      x = sum(t_spent[1:j][shock[1:j]==1])
+      tot = sum(t_spent[1:j])
+      f = c(f,x/tot)
+    }
+    f = f[1:maxD]
+    
+    pc=c()
+    for(j in 2:length(t)){
+      x = 1 - sum(shock[2:j])/(j-1)
+      pc = c(pc,x)
+    }
+    pc = pc[1:maxD]
+    
+    h=c()
+    for(j in 2:length(t)){
+      x = abs(sum(turns[2:j])/(j-1))
+      h = c(h,x)
+    }
+    h = h[1:maxD]
+    
+    #here calculate cummulative average (delT shock - delT noShock) or just the  last shock vs no shock delT? per decision
+    
+    
+    t = t[1:maxD]
+    col = col[1:maxD]
+    turns = turns[1:maxD]
+    shock = shock[1:maxD]
+    t_spent = t_spent[1:maxD]
+    
+    d_fracs[[i]] = f
+    d_pc[[i]] = pc
+    d_hand[[i]] = h
+  }
+  d_fracs = as.data.frame(d_fracs)
+  d_fracs = t(d_fracs)
+  d_dc = cbind(d_dc,d_fracs)
+  
+  # d_pc = as.data.frame(d_pc)
+  # d_pc = t(d_pc)
+  # d_dc = cbind(d_dc,d_pc)
+  
+  # d_hand = as.data.frame(d_hand)
+  # d_hand = t(d_hand)
+  # d_dc = cbind(d_dc,d_hand)
+  
+  test = d_dc[d_dc$treatment=='shock',]
+  
+  r2_ls = c()
+  r2_ss = c()
+  r2_gb = c()
+  slope_ls = c()
+  slope_ss = c()
+  slope_gb = c()
+  tr=c()
+  dec = c()
+  for(j in 1:maxD){
+    dec = c(dec,j)
+    tr = c(tr,'shock')
+    r2_ls=c(r2_ls,summary(lm(test[,paste0(j)]~test$ls))$r.squared)
+    slope_ls = c(slope_ls, coef(lm(test[,paste0(j)]~test$ls))[2])
+    r2_ss=c(r2_ss,summary(lm(test[,paste0(j)]~test$shock_sensitivity))$r.squared)
+    slope_ss = c(slope_ss, coef(lm(test[,paste0(j)]~test$shock_sensitivity))[2])
+    r2_gb=c(r2_gb,summary(lm(test[,paste0(j)]~test$bias_frac_time_on_shocked))$r.squared)
+    slope_gb = c(slope_gb, coef(lm(test[,paste0(j)]~test$bias_frac_time_on_shocked))[2])
+  }
+  
+  en_NL = c()
+  en_NR = c()
+  en_S = c()
+  kl_LR = c()
+  kl_LS = c()
+  kl_RS = c()
+  t = c()
+  treatment = c()
+  for(i in 2:maxD){
+    t = c(t,i)
+    treatment = c(treatment,'shock')
+    
+    dist_NL = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='NL']),numBins=numbins)
+    en_NL = c(en_NL,entropy(dist_NL,na.rm=T))
+    dist_NL = dist_NL/sum(dist_NL)
+    
+    dist_NR = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='NR']),numBins=numbins)
+    en_NR = c(en_NR,entropy(dist_NR,na.rm=T))
+    dist_NR = dist_NR/sum(dist_NR)
+    
+    dist_S = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='S']),numBins=numbins)
+    en_S = c(en_S,entropy(dist_S,na.rm=T))
+    dist_S = dist_S/sum(dist_S)
+    
+    kl_LR = c(kl_LR,KL(rbind(dist_NL,dist_NR),unit='log'))
+    kl_LS = c(kl_LS,KL(rbind(dist_NL,dist_S),unit='log'))
+    kl_RS = c(kl_RS,KL(rbind(dist_NR,dist_S),unit='log'))
+    
+  }
+  
+  temporal_kl_between_starting_arms_s = data.frame(
+    time = t,
+    treatment = treatment,
+    en_NL = en_NL,
+    en_NR = en_NR,
+    en_S = en_S,
+    kl_LR = kl_LR,
+    kl_LS = kl_LS,
+    kl_RS = kl_RS
+  )
+  
+  test = d_dc[d_dc$treatment=='noShock',]
+  
+  for(j in 1:maxD){
+    dec = c(dec,j)
+    tr = c(tr,' noShock')
+    r2_ls=c(r2_ls,summary(lm(test[,paste0(j)]~test$ls))$r.squared)
+    slope_ls = c(slope_ls, coef(lm(test[,paste0(j)]~test$ls))[2])
+    r2_ss=c(r2_ss,summary(lm(test[,paste0(j)]~test$shock_sensitivity))$r.squared)
+    slope_ss = c(slope_ss, coef(lm(test[,paste0(j)]~test$shock_sensitivity))[2])
+    r2_gb=c(r2_gb,summary(lm(test[,paste0(j)]~test$bias_frac_time_on_shocked))$r.squared)
+    slope_gb = c(slope_gb, coef(lm(test[,paste0(j)]~test$bias_frac_time_on_shocked))[2])
+  }
+  
+  en_NL = c()
+  en_NR = c()
+  en_S = c()
+  kl_LR = c()
+  kl_LS = c()
+  kl_RS = c()
+  t = c()
+  treatment = c()
+  for(i in 2:maxD){
+    t = c(t,i)
+    treatment = c(treatment,'noShock')
+    
+    dist_NL = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='NL']),numBins=numbins)
+    en_NL = c(en_NL,entropy(dist_NL,na.rm=T))
+    dist_NL = dist_NL/sum(dist_NL)
+    
+    dist_NR = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='NR']),numBins=numbins)
+    en_NR = c(en_NR,entropy(dist_NR,na.rm=T))
+    dist_NR = dist_NR/sum(dist_NR)
+    
+    dist_S = discretize(na.omit(test[,paste0(i)][test$starting_arm_code=='S']),numBins=numbins)
+    en_S = c(en_S,entropy(dist_S,na.rm=T))
+    dist_S = dist_S/sum(dist_S)
+    
+    kl_LR = c(kl_LR,KL(rbind(dist_NL,dist_NR),unit='log'))
+    kl_LS = c(kl_LS,KL(rbind(dist_NL,dist_S),unit='log'))
+    kl_RS = c(kl_RS,KL(rbind(dist_NR,dist_S),unit='log'))
+    
+  }
+  
+  temporal_kl_between_starting_arms_ns = data.frame(
+    time = t,
+    treatment = treatment,
+    en_NL = en_NL,
+    en_NR = en_NR,
+    en_S = en_S,
+    kl_LR = kl_LR,
+    kl_LS = kl_LS,
+    kl_RS = kl_RS
+  )
+  
+  corr_df_d = data.frame(
+    treatment = tr,
+    decision = dec,
+    r2_ls = r2_ls,
+    slope_ls = slope_ls,
+    r2_ss = r2_ss,
+    slope_ss = slope_ss,
+    r2_gb = r2_gb,
+    slope_gb = slope_gb
+  )
+  p=ggplot(corr_df_d,aes(x = decision, y = r2_ls, color = treatment))+
+    ggtitle("cumm frac vs learning score (r2)")+
+    geom_point()
+  print(p)
+  p=ggplot(corr_df_d,aes(x = decision, y = slope_ls, color = treatment))+
+    ggtitle("cumm frac vs learning score (slope)")+
+    geom_point()
+  print(p)
+  
+  p=ggplot(corr_df_d,aes(x = decision, y = r2_gb, color = treatment))+
+    ggtitle("cumm frac vs green bias (r2)")+
+    geom_point()
+  print(p)
+  p=ggplot(corr_df_d,aes(x = decision, y = slope_gb, color = treatment))+
+    ggtitle("cumm frac vs green bias (slope)")+
+    geom_point()
+  print(p)
+  
+  p=ggplot(corr_df_d,aes(x = decision, y = r2_ss, color = treatment))+
+    ggtitle("cumm frac vs shock sense (r2)")+
+    geom_point()
+  print(p)
+  p=ggplot(corr_df_d,aes(x = decision, y = slope_ss, color = treatment))+
+    ggtitle("cumm frac vs shock sense (slope)")+
+    geom_point()
+  print(p)
+  
+  p=ggplot()+
+    ylim(0,3)+
+    geom_hline(yintercept = 0)+
+    xlab("Decision (#)")+
+    ylab("Divergence")+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_LR),lwd=6,colour='gold',lty=1)+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_LS),lwd=6,colour='gold',lty=3)+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_RS),lwd=6,colour='gold',lty=2)+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_LR),lwd=6,colour='darkgrey',lty=1)+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_LS),lwd=6,colour='darkgrey',lty=3)+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_RS),lwd=6,colour='darkgrey',lty=2)+
+  theme_minimal()+
+  theme(axis.ticks.x = element_line(size = 1, colour = "lightgrey"), 
+                   axis.ticks.y = element_line(size = 1, colour = "lightgrey"),
+                   axis.ticks.length = unit(20, "pt"))+
+  theme(axis.text.x = element_blank())+
+  theme(axis.text.y = element_blank())+
+  theme(plot.title = element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_blank())
+  
+  png(paste0('generated_plots/',str,'_',maxD,'_decisions.png'),1200,525)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot()+
+    ylim(0,3)+
+    geom_hline(yintercept = 0)+
+    xlab("Decision (#)")+
+    ylab("Divergence")+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_LR),lwd=6,colour='gold',lty=1)+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_LS),lwd=6,colour='gold',lty=3)+
+    geom_line(data = temporal_kl_between_starting_arms_s,aes(x=time,y=kl_RS),lwd=6,colour='gold',lty=2)+
+  theme_minimal()+
+  theme(axis.ticks.x = element_line(size = 1, colour = "lightgrey"), 
+                   axis.ticks.y = element_line(size = 1, colour = "lightgrey"),
+                   axis.ticks.length = unit(20, "pt"))+
+  theme(axis.text.x = element_blank())+
+  theme(axis.text.y = element_blank())+
+  theme(plot.title = element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_blank())
+  
+  png(paste0('generated_plots/',str,'_',maxD,'_decisions_shock.png'),1200,525)
+  print(p)
+  dev.off()
+  print(p)
+  
+  p=ggplot()+
+    ylim(0,3)+
+    geom_hline(yintercept = 0)+
+    xlab("Decision (#)")+
+    ylab("Divergence")+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_LR),lwd=6,colour='darkgrey',lty=1)+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_LS),lwd=6,colour='darkgrey',lty=3)+
+  geom_line(data = temporal_kl_between_starting_arms_ns,aes(x=time,y=kl_RS),lwd=6,colour='darkgrey',lty=2)+
+  theme_minimal()+
+  theme(axis.ticks.x = element_line(size = 1, colour = "lightgrey"), 
+                   axis.ticks.y = element_line(size = 1, colour = "lightgrey"),
+                   axis.ticks.length = unit(20, "pt"))+
+  theme(axis.text.x = element_blank())+
+  theme(axis.text.y = element_blank())+
+  theme(plot.title = element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_blank())
+  
+  png(paste0('generated_plots/',str,'_',maxD,'_decisions_noShock.png'),1200,525)
+  print(p)
+  dev.off()
+  print(p)
+}
+```
+
+For 50 decisions all flies:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+divergence_per_decision(d,50,"all")
+```
+
+For 50 decisions in top 50% learning score:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$ls>quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$ls>quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50LS")
+```
+
+For 50 decisions in bottom 50% learning score
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$ls<=quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$ls<=quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"bottom50LS")
+```
+
+For 50 decisions in top 50% T~shocked~
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$frac_time_on_shocked>quantile(ds$frac_time_on_shocked,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$frac_time_on_shocked>quantile(dnS$frac_time_on_shocked,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50TP")
+```
+
+For 50 decisions in bottom 50% T~shocked~
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$frac_time_on_shocked<=quantile(ds$frac_time_on_shocked,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$frac_time_on_shocked<=quantile(dnS$frac_time_on_shocked,na.rm=T)[3],])
+divergence_per_decision(dd,50,"bottom50TP")
+```
+
+For 50 decisions in top 50% green biased flies
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked>quantile(ds$bias_frac_time_on_shocked,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked>quantile(dnS$bias_frac_time_on_shocked,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50bias")
+```
+
+For 50 decisions in bottom 50% green biased flies
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked<=quantile(ds$bias_frac_time_on_shocked,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked<=quantile(dnS$bias_frac_time_on_shocked,na.rm=T)[3],])
+divergence_per_decision(dd,50,"bottom50bias")
+```
+
+Top 50% bias and LS:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked>quantile(ds$bias_frac_time_on_shocked,na.rm=T)[3] & ds$ls>quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked>quantile(dnS$bias_frac_time_on_shocked,na.rm=T)[3] & dnS$ls>quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50biasLS")
+```
+
+Top 50% LS bottom 50% bias:
+
+```{r}
+dd = ds[ds$bias_frac_time_on_shocked<=quantile(ds$bias_frac_time_on_shocked,na.rm=T)[3] & ds$ls>quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked<=quantile(dnS$bias_frac_time_on_shocked,na.rm=T)[3] & dnS$ls>quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50LSbottom50bias")
+```
+
+For 50 decisions in green biased flies:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked>1/3,]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked>1/3,])
+divergence_per_decision(dd,50,"green_bias")
+```
+
+For 50 decisions in blue biased flies:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked<1/3,]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked<1/3,])
+divergence_per_decision(dd,50,"blue_bias")
+```
+
+For 50 decisions in Top 50% LS and green biased flies:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked>1/3 & ds$ls>quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked>1/3 & dnS$ls>quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50LS_green")
+```
+
+For 50 decisions in top %0% LS and blue biased flies:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+dd = ds[ds$bias_frac_time_on_shocked<1/3 & ds$ls>quantile(ds$ls,na.rm=T)[3],]
+dd = rbind(dd, dd = dnS[dnS$bias_frac_time_on_shocked<1/3 & dnS$ls>quantile(dnS$ls,na.rm=T)[3],])
+divergence_per_decision(dd,50,"top50LS_blue")
+```
+
+## Residual heterozygosity and shock response
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+hetero <- read.csv("/Users/riddha/git/Genetics_of_learning_individuality/hetero.txt", sep="")
+hetero$genotype=str_replace(hetero$genotype,'RAL_','dgrp')
+hetero$genotype = str_replace(hetero$genotype,"\\*","")
+for(i in 2:6){
+  hetero[,i] = str_replace(hetero[,i],"\\([^()]*\\)",'')
+  hetero[,i] = str_replace(hetero[,i],',','')
+}
+hetero$X = as.numeric(hetero$X)
+hetero$X2L = as.numeric(hetero$X2L)
+hetero$X2R = as.numeric(hetero$X2R)
+hetero$X3L = as.numeric(hetero$X3L)
+hetero$X3R = as.numeric(hetero$X3R)
+
+hetero = hetero[hetero$genotype %in% unique(ds$genotype),]
+
+h = c()
+for(i in 1:length(hetero$genotype)){
+  h = c(h, sum(hetero[i,2:6],na.rm = T))
+}
+hetero$h = h
+
+grand_frac = full_join(grand_frac,hetero,by='genotype')
+grand_ls = full_join(grand_ls,hetero,by='genotype')
+grand_pc = full_join(grand_pc,hetero,by='genotype')
+grand_relAc = full_join(grand_relAc,hetero,by='genotype')
+grand_hand = full_join(grand_hand,hetero,by='genotype')
+grand_Ac = full_join(grand_Ac,hetero,by='genotype')
+grand_bias = full_join(grand_bias,hetero,by='genotype')
+grand_dn = full_join(grand_dn,hetero,by='genotype')
+grand_ss = full_join(grand_ss,hetero,by='genotype')
+
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+p=ggplot(grand_frac,aes(x=h,y=entropy,group=treatment,color=treatment))+
+  ggtitle("Task performance")+
+  xlab("Heterozygosity")+
+  ylab("Entropy")+
+  geom_point()+
+  stat_poly_line()+
+  stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+png(paste0('generated_plots/res_hetero_vs_entropy_in_frac.png'),600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+  
+p=ggplot(ds,aes(x=shock_sensitivity,y=frac_time_on_shocked))+
+  ggtitle("Task performance")+
+  xlab("Shock response")+
+  ylab("Task performance")+
+  geom_point(colour='gold')+
+  stat_poly_line()+
+  stat_poly_eq(use_label(c('eq','p','r2')), size = 6)+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_text(size = 32, face='bold'))+
+  theme(axis.title.y = element_text(size = 32, face='bold'))
+  
+png(paste0('generated_plots/ss_vs_frac.png'),600,600,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+```
+
+## Genotype effects:
+
+Resampling tests
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+grand_frac <- read_csv("~/git/Genetics_of_learning_individuality/grand_frac.csv")
+grand_ls <- read_csv("~/git/Genetics_of_learning_individuality/grand_ls.csv")
+grand_bias <- read_csv("~/git/Genetics_of_learning_individuality/grand_bias.csv")
+grand_pc <- read_csv("~/git/Genetics_of_learning_individuality/grand_pc.csv")
+grand_ss <- read_csv("~/git/Genetics_of_learning_individuality/grand_ss.csv")
+grand_dn <- read_csv("~/git/Genetics_of_learning_individuality/grand_dn.csv")
+grand_Ac <- read_csv("~/git/Genetics_of_learning_individuality/grand_Ac.csv")
+grand_relAc <- read_csv("~/git/Genetics_of_learning_individuality/grand_relAc.csv")
+grand_hand <- read_csv("~/git/Genetics_of_learning_individuality/grand_hand.csv")
+
+rank_frac = grand_frac[is.na(grand_frac$treatment),]
+rank_frac$rank_ev=rank(rank_frac$ev)
+rank_frac$rank_hell_ev=rank(rank_frac$hell_ev)
+
+perm.l = lmperm(ev~rank_ev,rank_frac,1000000)
+plot(perm.l,lwd=2)
+print(perm.l)
+
+perm.l = lmperm(hell_ev~rank_hell_ev,rank_frac,1000000)
+plot(perm.l,lwd=2)
+print(perm.l)
+
+rank_frac = grand_frac[!is.na(grand_frac$treatment) & grand_frac$treatment == 'shock',]
+rank_frac$rank_entropy=rank(rank_frac$entropy)
+rank_frac$rank_resid_entropy=rank(rank_frac$resid_entropy)
+
+perm.l = lmperm(entropy~rank_entropy,rank_frac,1000000)
+plot(perm.l,lwd=2)
+print(perm.l)
+
+perm.l = lmperm(resid_entropy~rank_resid_entropy,rank_frac,1000000)
+plot(perm.l,lwd=2)
+print(perm.l)
+
+```
+
+Entropy:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+p= ggplot()+
+  ylab(bquote(bold('H T'['shocked'])))+
+  geom_point(data=grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',], aes(x=reorder(genotype,entropy),y=entropy),size=3,colour='gold')+
+  scale_x_discrete(labels = str_pad(str_sub(levels(with(grand_frac[!(is.na(grand_frac$treatment))&grand_frac$treatment=='shock',],reorder(genotype,entropy,na.rm=T))),5),3,'left','0'), name = "Genotypes")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(legend.text=element_text(size = 32))+
+  theme(legend.title=element_text(size = 32))
+png(paste0('generated_plots/frac_Entropy_rank_shock.png'),2000,500,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+p= ggplot()+
+  ylab(bquote(bold('H T'['shocked'])))+
+  geom_point(data=grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',], aes(x=reorder(genotype,entropy),y=entropy),size=3,colour='darkgray')+
+  scale_x_discrete(labels = str_pad(str_sub(levels(with(grand_frac[!(is.na(grand_frac$treatment))&grand_frac$treatment=='noShock',],reorder(genotype,entropy,na.rm=T))),5),3,'left','0'), name = "Genotypes")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(legend.text=element_text(size = 32))+
+  theme(legend.title=element_text(size = 32))
+png(paste0('generated_plots/frac_Entropy_rank_noShock.png'),2000,500,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+cor = cor.test(grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$estimate
+  pval = cor.test(grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$p.value
+p<-ggplot(grand_frac[!(is.na(grand_frac$treatment)),],aes(x = treatment, y = entropy))+
+  ylab(bquote(bold('H T'['shocked'])))+
+  geom_point(colour=grand_frac[!(is.na(grand_frac$treatment)),]$color,size=2)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+  annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\n p = ",round(pval,3)), x = Inf, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              textsize=8,
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold'
+  )
+  png(paste0('generated_plots/Entropy_frac_snS.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+p = ggplot()+
+  ylab(bquote(bold('Hellinger'*scriptstyle(atop('control       ',' conditioned'))*' T'['shocked'])))+
+  geom_point(data=grand_frac[is.na(grand_frac$treatment),], aes(x=reorder(genotype,hell_ev),y=hell_ev),size=3,colour='black')+
+  scale_x_discrete(labels = str_pad(str_sub(levels(with(grand_frac[is.na(grand_frac$treatment),],reorder(genotype,hell_ev,na.rm=T))),5),3,'left','0'), name = "Genotypes")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(legend.text=element_text(size = 32))+
+  theme(legend.title=element_text(size = 32))
+png(paste0('generated_plots/frac_hell_ev_rank.png'),2000,500,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+  
+cor = cor.test(grand_frac$hell_rep[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$hell_rep[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$estimate
+pval = cor.test(grand_frac$hell_rep[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$hell_rep[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$p.value
+p<-ggplot(grand_frac[!(is.na(grand_frac$treatment)),],aes(x = treatment, y = hell_rep))+
+  ylab(bquote(bold('Hellinger'*scriptstyle(atop('replicate 1','replicate 2'))*' T'['shocked'])))+
+  geom_point(colour=grand_frac[!(is.na(grand_frac$treatment)),]$color,size=2)+
+  geom_boxplot(outlier.shape = NA,alpha=0)+
+  geom_line(aes(group=genotype),colour=alpha("darkgray",0.3))+
+  annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\n p = ",round(pval,3)), x = Inf, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+  scale_x_discrete(labels=c('Control','Conditioned'))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 32, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  stat_signif(comparisons = list(c('noShock','shock')),
+              na.rm = TRUE,
+              test = "t.test",
+              textsize=8,
+              map_signif_level=c("***"=0.001,"**"=0.01, "*"=0.05, "N.S."=2),
+              fontface = 'bold'
+  )
+  png(paste0('generated_plots/hell_rep_frac_snS.png'),600,600,'px',pointsize=12)
+  print(p)
+  dev.off()
+  print(p)
+  
+  cor = cor.test(grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$estimate
+pval = cor.test(grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='noShock'],grand_frac$entropy[!is.na(grand_frac$treatment)&grand_frac$treatment=='shock'])$p.value
+p<-ggplot()+
+  ylab(bquote(bold('H T'['shocked'])))+
+  annotate("segment",x=1:88,xend=sapply(levels(with(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',],reorder(genotype,entropy))), function(x) which(x == with(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',],levels(reorder(genotype,entropy,na.rm=T))))),y=sort(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',]$entropy),yend=sapply(levels(with(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',],reorder(genotype,entropy))), function(x) grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',]$entropy[x == grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',]$genotype]),colour = "lightgray")+
+  annotate(geom = 'text', label = paste0("r = ",round(cor,3),"\np = ",round(pval,3)), x = 5, y = Inf, hjust = 1, vjust = 1, size = 10, fontface=2)+
+  annotate(geom = 'text', label = "***", x = 80, y = -0.8, hjust = 1, vjust = 1, size = 10, fontface=2, angle = 90)+
+  geom_hline(yintercept = mean(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',]$entropy),color='gold',lwd=1.5)+
+  geom_hline(yintercept = mean(grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',]$entropy),color='darkgray',lwd=1.5)+
+  geom_point(data=grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='noShock',], aes(x=as.numeric(reorder(genotype,entropy)),y=entropy),size=4,colour='darkgray',shape=16)+
+  geom_point(data=grand_frac[!(is.na(grand_frac$treatment)) & grand_frac$treatment=='shock',], aes(x=as.numeric(reorder(genotype,entropy)),y=entropy),size=4,colour='gold',shape=18)+
+  scale_x_continuous(breaks = 1:88,labels = paste(str_pad(str_sub(levels(with(grand_frac[!(is.na(grand_frac$treatment))&grand_frac$treatment=='shock',],reorder(genotype,entropy,na.rm=T))),5),3,'left','0'),str_pad(str_sub(levels(with(grand_frac[!(is.na(grand_frac$treatment))&grand_frac$treatment=='noShock',],reorder(genotype,entropy,na.rm=T))),5),3,'left','0')), name = "Genotypes")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, size = 20, face='bold'))+
+  theme(axis.text.y = element_text(size = 32, face='bold'))+
+  theme(plot.title = element_text(size = 32, face='bold'))+
+  theme(axis.title.x = element_blank())+
+  theme(axis.title.y = element_text(size = 32, face='bold'))+
+  theme(legend.text=element_text(size = 32))+
+  theme(legend.title=element_text(size = 32))
+png(paste0('generated_plots/frac_Entropy_rank.png'),2000,500,'px',pointsize=12)
+print(p)
+dev.off()
+print(p)
+
+
+```
+
+Continuous entropy vs scaled-discretized entropy:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+eq_resid_en = cbind(rank_frac$genotype[order(rank_frac$rank_resid_entropy)][sort(rank_frac$rank_resid_entropy) == sort(rank_frac$rank_resid_entropy)[-1]], rank_frac$genotype[order(rank_frac$rank_resid_entropy)[-1]][sort(rank_frac$rank_resid_entropy)[-1] == sort(rank_frac$rank_resid_entropy)])
+
+
+```
+
+## Comparing individuality scores:
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+temp_LSM = LSM_frac[,c(7,2)]
+temp_LSM$treatment = NA
+grand_frac = full_join(grand_frac,temp_LSM,by=c('genotype','treatment'))
+colnames(grand_frac)[22] = "LSM"
+
+# for Tshocked
+low = 0
+high = 1
+
+gens = unique(ds$genotype)
+var_s = c()
+var_ns = c()
+range_s = c()
+range_ns = c()
+jsd = c()
+continuous_kl = c()
+centered_continuous_kl = c()
+centered_hellinger = c()
+centered_jsd = c()
+
+genotype = c()
+
+for(g in gens){
+  dist_s = ds$frac_time_on_shocked[ds$genotype==g]
+  dist_ns = dnS$frac_time_on_shocked[dnS$genotype==g]
+  
+  genotype = c(genotype, g)
+  
+  var_s = c(var_s,var(dist_s,na.rm=T))
+  var_ns = c(var_ns,var(dist_ns,na.rm=T))
+  range_s = c(range_s,diff(range(dist_s,na.rm=T)))
+  range_ns = c(range_ns,diff(range(dist_ns,na.rm=T)))
+  
+  jsd = c(jsd, get_jsd(dist_s,dist_ns,low,high))
+  continuous_kl = c(continuous_kl,get_kl(dist_s,dist_ns,low,high))
+  centered_continuous_kl = c(centered_continuous_kl,get_centered_kl(dist_s,dist_ns,low,high))
+  centered_hellinger = c(centered_hellinger,get_centered_hellinger(dist_s,dist_ns,low,high))
+  centered_jsd = c(centered_jsd,get_centered_jsd(dist_s,dist_ns,low,high))
+}
+
+validation_individuality_scores = data.frame(
+  genotype = genotype,
+  Range_conditioned = range_s,
+  Range_control = range_ns,
+  Variance_conditioned = var_s,
+  Variance_control = var_ns,
+  JSD = jsd,
+  Continuous_KL = continuous_kl,
+  Centered_continuous_KL = centered_continuous_kl,
+  Centered_Hellinger = centered_hellinger,
+  Centered_JSD = centered_jsd
+)
+
+validation_individuality_scores$Entropy_conditioned = grand_frac$entropy[!is.na(grand_frac$treatment) & grand_frac$treatment == 'shock']
+
+validation_individuality_scores$Entropy_control = grand_frac$entropy[!is.na(grand_frac$treatment) & grand_frac$treatment == 'noShock']
+
+validation_individuality_scores$Residual_entropy_conditioned = grand_frac$resid_entropy[!is.na(grand_frac$treatment) & grand_frac$treatment == 'shock']
+
+validation_individuality_scores$Residual_entropy_control = grand_frac$resid_entropy[!is.na(grand_frac$treatment) & grand_frac$treatment == 'noShock']
+
+validation_individuality_scores$LSM = grand_frac$LSM[is.na(grand_frac$treatment)]
+
+validation_individuality_scores$EV = grand_frac$ev[is.na(grand_frac$treatment)]
+
+validation_individuality_scores$Hellinger = grand_frac$hell_ev[is.na(grand_frac$treatment)]
+
+validation_individuality_scores$treatment = NA
+
+colnames(validation_individuality_scores) =  str_replace_all(colnames(validation_individuality_scores),'_',' ')
+
+validation_individuality_scores = validation_individuality_scores[,c(1,18,2,3,4,5,11,12,13,14,15,16,17,6,7,8,9,10)]
+
+cor.table = cor(validation_individuality_scores[,3:18])
+corrplot(cor.table)
+plot(validation_individuality_scores[,3:18],las=2,font=2)
+```

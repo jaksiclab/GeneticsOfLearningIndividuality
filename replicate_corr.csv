@@ -1,0 +1,55 @@
+Measure,Treatment,r (between  replicates),p.val,significance
+Mean Task performance,noShock,0.389978891,0.000172738,***
+Mean Learning score,noShock,-0.158960822,0.139063657,
+Mean Percent correct,noShock,0.097309643,0.367090738,
+Mean Handedness,noShock,0.236547049,0.026495462,*
+Mean Velocity,noShock,0.913481825,2.43118145989941e-35,***
+Mean Relative velocity,noShock,0.158189051,0.14101745,
+Mean Shock response,noShock,0.591509571,1.29224737165341e-09,***
+Mean Green bias,noShock,0.04647669,0.667203944,
+Mean Developmental noise,noShock,0.474600291,2.98923756267488e-06,***
+Mean Task performance,shock,0.613191609,2.14194036173428e-10,***
+Mean Learning score,shock,0.300294932,0.004473893,**
+Mean Percent correct,shock,0.294209014,0.005397078,**
+Mean Handedness,shock,0.401192544,0.000107166,***
+Mean Velocity,shock,0.862535306,3.5701244959589e-27,***
+Mean Relative velocity,shock,0.674276507,5.96945805690132e-13,***
+Mean Shock response,shock,0.688036292,1.30130298083106e-13,***
+Mean Green bias,shock,0.171972517,0.109124792,
+Mean Developmental noise,shock,0.399096852,0.000117319,***
+Entropy Task performance,noShock,0.43079198,2.79321815784713e-05,***
+Entropy Learning score,noShock,0.031204982,0.7728772,
+Entropy Percent correct,noShock,0.717525083,3.68149504035171e-15,***
+Entropy Handedness,noShock,0.03080439,0.775715679,
+Entropy Velocity,noShock,0.697537342,4.32428633644424e-14,***
+Entropy Relative velocity,noShock,0.476668552,2.6690021846685e-06,***
+Entropy Shock response,noShock,0.428924847,3.05191908397364e-05,***
+Entropy Green bias,noShock,0.496615922,8.60713359102407e-07,***
+Entropy Developmental noise,noShock,0.214329164,0.044941153,*
+Entropy Task performance,shock,0.12710202,0.237973351,
+Entropy Learning score,shock,0.151993358,0.157460192,
+Entropy Percent correct,shock,0.568741805,7.43276157824662e-09,***
+Entropy Handedness,shock,0.346789509,0.000932921,***
+Entropy Velocity,shock,0.638671723,2.15870086594163e-11,***
+Entropy Relative velocity,shock,0.350393217,0.000817646,***
+Entropy Shock response,shock,0.605768397,4.02399695970752e-10,***
+Entropy Green bias,shock,0.32142907,0.002260924,**
+Entropy Developmental noise,shock,0.030276707,0.779459183,
+Residual entropy Task performance,noShock,0.237374378,0.025956539,*
+Residual entropy Learning score,noShock,-0.204787527,0.055626996,
+Residual entropy Percent correct,noShock,-0.088125186,0.414238536,
+Residual entropy Handedness,noShock,0.049477356,0.647108419,
+Residual entropy Velocity,noShock,0.029113936,0.787725795,
+Residual entropy Relative velocity,noShock,0.103121516,0.339028835,
+Residual entropy Shock response,noShock,0.11047295,0.305528,
+Residual entropy Green bias,noShock,0.154799074,0.149845558,
+Residual entropy Developmental noise,noShock,0.236517225,0.026515066,*
+Residual entropy Task performance,shock,0.071185662,0.509851164,
+Residual entropy Learning score,shock,-0.214152977,0.045121812,*
+Residual entropy Percent correct,shock,-0.187963066,0.079480951,
+Residual entropy Handedness,shock,-0.05350883,0.620504717,
+Residual entropy Velocity,shock,-0.045385669,0.674570026,
+Residual entropy Relative velocity,shock,0.050278779,0.641783012,
+Residual entropy Shock response,shock,0.024589444,0.820108345,
+Residual entropy Green bias,shock,-0.121408592,0.259825711,
+Residual entropy Developmental noise,shock,0.022333494,0.836371543,
