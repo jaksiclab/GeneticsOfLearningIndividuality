@@ -2633,3 +2633,18 @@ cor.table = cor(validation_individuality_scores[,3:18])
 corrplot(cor.table)
 plot(validation_individuality_scores[,3:18],las=2,font=2)
 ```
+
+```{r}
+t = dnS[dnS$genotype=='dgrp362',]
+n = 60
+plot(density(unlist(t$lc)[seq(n,length(unlist(t$lc)),120)]),xlim=c(0,1))
+for(i in 1:27){
+  plot(density(t$lc[[i]][c(F,F,F,T)]),xlim=c(0,1))
+  # plot(density(t$lc[[i]]),xlim=c(0,1))
+  # print(mean(t$lc[[i]]))
+  # print(range(t$lc[[i]]))
+  print(mean(t$lc[[i]][c(F,F,F,T)]))
+  print(range(t$lc[[i]][c(F,F,F,T)]))
+}
+
+```

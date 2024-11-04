@@ -1,0 +1,10 @@
+X 164 noshock GBB
+R 164 noshock GBB same col (based on previous pattern): X
+L 148 shock GGB : MR-RM : RL:noShock
+M 137 noshock GYY : LM-ML : LM: shock
+L 100 noshock YBB : MR-RM : ML: noShock
+M 145 shock GGY : MR-RM : LM:noShock
+L 289 shock BBY : LM-ML: ML: shock
+M 268 noshock BYB : LM-ML : ML: shock
+R 137 noshock GYY :LR-RL : MR: noShock
+L 273 BGY : MR-RM : RL: noShock

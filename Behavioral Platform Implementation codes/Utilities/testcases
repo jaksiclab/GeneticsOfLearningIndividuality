@@ -1,0 +1,16 @@
+G -> shock
+B -> noShock
+R -> noise
+
+possible options :
+B,G -> Hit, Miss
+B,R -> FA, CR
+
+Fly in: next pattern
+L : XBG, XGB; XBR, XRB
+M : BXG, GXB; BXR, RXB
+R : BGX, GBX; BRX, RBX
+
+pattern_arr = BBG BGB GBG GGB RBG RGB; BBR BRB GBR GRB RBR RRB
+              BBG GBB BGG GGB BRG GRB; BBR RBB BGR RGB BRR RRB
+              BGB GBB BGG GBG BGR GBR; BRB RBB BRG RBG BRR RBR
