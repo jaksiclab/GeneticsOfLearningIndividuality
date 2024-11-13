@@ -1,2 +1,4 @@
 # GeneticsOfLearningIndividuality
-Data and code associated with the manuscript "Genetics shapes the diversity of individuality based on valent experience"
+Data and code associated with the manuscript "GLearning is a fundamental source of behavioral individuality"
+
+
