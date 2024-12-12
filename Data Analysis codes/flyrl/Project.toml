@@ -1,0 +1,47 @@
+name = "FlyRL"
+uuid = "755ee7f4-b036-4d80-acc1-2e62a5aedce1"
+authors = ["Johanni Brea <jbrea@users.noreply.github.com>"]
+version = "0.1.0"
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CategoricalArrays = "324d7699-5711-5eae-9e2f-1d82baa6b597"
+ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
+ConcreteStructs = "2569d6c7-a4a2-43d3-a901-331e8e4be471"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+LaplacianExpectationMaximization = "610349f3-aa2e-4e53-b232-3ba00964b24d"
+LibGit2 = "76f85450-5226-5b5a-8eaa-529ad045b433"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LogExpFunctions = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+RollingFunctions = "b0e4dd01-7b14-53d8-9b45-175a3e362653"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+YMaze = "69b69c5f-188d-447a-88e1-d6f22a902dac"
+
+[compat]
+CSV = "0.10"
+CategoricalArrays = "0.10"
+ComponentArrays = "0.13,0.14,0.15"
+DataFrames = "1"
+DocStringExtensions = "0.9"
+LaplacianExpectationMaximization = "0.1"
+NLopt = "0.6,1"
+Optim = "1"
+RollingFunctions = "0.7,0.8"
+StatsBase = "0.33, 0.34"
+julia = "1.9"
+
+[extras]
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test", "InteractiveUtils"]
